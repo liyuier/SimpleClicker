@@ -41,7 +41,7 @@ namespace SimpleClicker
         private ComboBox cmbButton;
 
         // 配置文件路径
-        private string configPath = Path.Combine(Application.StartupPath, "config.txt");
+        private string configPath = Path.Combine(Application.StartupPath, "config.ini");
 
         public MainForm()
         {
@@ -64,7 +64,11 @@ namespace SimpleClicker
                     string[] lines = File.ReadAllLines(configPath);
                     foreach (string line in lines)
                     {
-                        string[] parts = line.Split('=');
+                        // 跳过空行和注释行
+                        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#") || line.StartsWith(";"))
+                            continue;
+                            
+                        string[] parts = line.Split(new char[] {'='}, 2); // 最多分割成两部分
                         if (parts.Length == 2)
                         {
                             string key = parts[0].Trim();
@@ -79,15 +83,15 @@ namespace SimpleClicker
                                     }
                                     break;
                                 case "clickButton":
-                                    if (Enum.TryParse(value, out MouseButtons button))
+                                    if (int.TryParse(value, out int buttonValue))
                                     {
-                                        clickButton = button;
+                                        clickButton = (MouseButtons)buttonValue;
                                     }
                                     break;
                                 case "hotkey":
-                                    if (Enum.TryParse(value, out Keys parsedHotkey))
+                                    if (int.TryParse(value, out int hotkeyValue))
                                     {
-                                        hotkey = parsedHotkey;
+                                        hotkey = (Keys)hotkeyValue;
                                     }
                                     break;
                             }
@@ -95,10 +99,13 @@ namespace SimpleClicker
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // 如果加载失败，使用默认值
-                MessageBox.Show("配置文件损坏，使用默认设置", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show($"配置文件加载失败，使用默认设置: {ex.Message}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                interval = 100;
+                clickButton = MouseButtons.Left;
+                hotkey = Keys.F6;
             }
         }
 
@@ -106,9 +113,7 @@ namespace SimpleClicker
         {
             try
             {
-                string configContent = $"interval={interval}\n" +
-                                     $"clickButton={clickButton}\n" +
-                                     $"hotkey={hotkey}";
+                string configContent = $"# SimpleClicker 配置文件\r\ninterval={interval}\r\nclickButton={(int)clickButton}\r\nhotkey={(int)hotkey}";
                 File.WriteAllText(configPath, configContent);
             }
             catch (Exception ex)
@@ -536,6 +541,3 @@ namespace SimpleClicker
         }
     }
 }
-
-
-
