@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,14 +37,84 @@ namespace SimpleClicker
         private Button btnConfirmHotkey;
         private Button btnCancelHotkey;
         private Label lblStatus;
+        private NumericUpDown nudInterval;
+        private ComboBox cmbButton;
+
+        // 配置文件路径
+        private string configPath = Path.Combine(Application.StartupPath, "config.txt");
 
         public MainForm()
         {
+            // 加载配置
+            LoadConfig();
+            
             // 直接初始化控件
             InitializeControls();
             
             // 启动全局键盘钩子
             StartGlobalHook();
+        }
+
+        private void LoadConfig()
+        {
+            try
+            {
+                if (File.Exists(configPath))
+                {
+                    string[] lines = File.ReadAllLines(configPath);
+                    foreach (string line in lines)
+                    {
+                        string[] parts = line.Split('=');
+                        if (parts.Length == 2)
+                        {
+                            string key = parts[0].Trim();
+                            string value = parts[1].Trim();
+                            
+                            switch (key)
+                            {
+                                case "interval":
+                                    if (int.TryParse(value, out int parsedInterval))
+                                    {
+                                        interval = Math.Max(1, Math.Min(99999, parsedInterval));
+                                    }
+                                    break;
+                                case "clickButton":
+                                    if (Enum.TryParse(value, out MouseButtons button))
+                                    {
+                                        clickButton = button;
+                                    }
+                                    break;
+                                case "hotkey":
+                                    if (Enum.TryParse(value, out Keys parsedHotkey))
+                                    {
+                                        hotkey = parsedHotkey;
+                                    }
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // 如果加载失败，使用默认值
+                MessageBox.Show("配置文件损坏，使用默认设置", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void SaveConfig()
+        {
+            try
+            {
+                string configContent = $"interval={interval}\n" +
+                                     $"clickButton={clickButton}\n" +
+                                     $"hotkey={hotkey}";
+                File.WriteAllText(configPath, configContent);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"保存配置失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void InitializeControls()
@@ -62,7 +133,7 @@ namespace SimpleClicker
                 Size = new System.Drawing.Size(120, 20)
             };
 
-            NumericUpDown nudInterval = new NumericUpDown()
+            nudInterval = new NumericUpDown()
             {
                 Location = new System.Drawing.Point(150, 20),
                 Size = new System.Drawing.Size(100, 20),
@@ -70,7 +141,11 @@ namespace SimpleClicker
                 Maximum = 99999,
                 Value = interval
             };
-            nudInterval.ValueChanged += (s, e) => interval = (int)nudInterval.Value;
+            nudInterval.ValueChanged += (s, e) => 
+            {
+                interval = (int)nudInterval.Value;
+                SaveConfig(); // 保存配置
+            };
 
             // 连点按钮选择
             Label lblButton = new Label()
@@ -80,7 +155,7 @@ namespace SimpleClicker
                 Size = new System.Drawing.Size(120, 20)
             };
 
-            ComboBox cmbButton = new ComboBox()
+            cmbButton = new ComboBox()
             {
                 Location = new System.Drawing.Point(150, 60),
                 Size = new System.Drawing.Size(100, 20),
@@ -88,10 +163,11 @@ namespace SimpleClicker
             };
             cmbButton.Items.Add("左键");
             cmbButton.Items.Add("右键");
-            cmbButton.SelectedIndex = 0;
+            cmbButton.SelectedIndex = clickButton == MouseButtons.Left ? 0 : 1;
             cmbButton.SelectedIndexChanged += (s, e) =>
             {
                 clickButton = cmbButton.SelectedIndex == 0 ? MouseButtons.Left : MouseButtons.Right;
+                SaveConfig(); // 保存配置
             };
 
             // 热键设置
@@ -107,7 +183,7 @@ namespace SimpleClicker
                 Location = new System.Drawing.Point(150, 100),
                 Size = new System.Drawing.Size(100, 20),
                 ReadOnly = true,
-                Text = hotkey.ToString()
+                Text = GetHotkeyString(hotkey) // 显示加载的热键
             };
 
             btnSetHotkey = new Button()
@@ -204,6 +280,8 @@ namespace SimpleClicker
                 btnSetHotkey.Enabled = true;
                 btnConfirmHotkey.Enabled = false;
                 btnCancelHotkey.Enabled = false;
+                
+                SaveConfig(); // 保存配置
             }
         }
 
@@ -440,6 +518,7 @@ namespace SimpleClicker
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            SaveConfig(); // 关闭前保存配置
             StopClicking(null);
             base.OnFormClosing(e);
         }
