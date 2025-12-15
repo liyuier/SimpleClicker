@@ -1,0 +1,462 @@
+﻿using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace SimpleClicker
+{
+    public partial class MainForm : Form
+    {
+        private bool isRunning = false;
+        private int interval = 100; // 默认间隔100毫秒
+        private MouseButtons clickButton = MouseButtons.Left;
+        private Keys hotkey = Keys.F6; // 默认热键F6
+        private bool isHotkeySetMode = false;
+        private Keys tempHotkey = Keys.None; // 临时存储新热键
+        private Thread clickThread = null;
+        private CancellationTokenSource cancellationTokenSource = null;
+        private bool lastHotkeyState = false; // 用于跟踪热键状态变化
+
+        // Windows API 声明
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(Keys vKey);
+
+        [DllImport("user32.dll")]
+        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
+
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x02;
+        private const uint MOUSEEVENTF_LEFTUP = 0x04;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x08;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x10;
+
+        private TextBox txtHotkey;
+        private Button btnSetHotkey;
+        private Button btnConfirmHotkey;
+        private Button btnCancelHotkey;
+        private Label lblStatus;
+
+        public MainForm()
+        {
+            // 直接初始化控件
+            InitializeControls();
+            
+            // 启动全局键盘钩子
+            StartGlobalHook();
+        }
+
+        private void InitializeControls()
+        {
+            this.Text = "SimpleClicker - 鼠标连点器";
+            this.Size = new System.Drawing.Size(400, 350);
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.MaximizeBox = false;
+
+            // 间隔设置
+            Label lblInterval = new Label()
+            {
+                Text = "连点间隔(毫秒):",
+                Location = new System.Drawing.Point(20, 20),
+                Size = new System.Drawing.Size(120, 20)
+            };
+
+            NumericUpDown nudInterval = new NumericUpDown()
+            {
+                Location = new System.Drawing.Point(150, 20),
+                Size = new System.Drawing.Size(100, 20),
+                Minimum = 1,
+                Maximum = 99999,
+                Value = interval
+            };
+            nudInterval.ValueChanged += (s, e) => interval = (int)nudInterval.Value;
+
+            // 连点按钮选择
+            Label lblButton = new Label()
+            {
+                Text = "连点按键:",
+                Location = new System.Drawing.Point(20, 60),
+                Size = new System.Drawing.Size(120, 20)
+            };
+
+            ComboBox cmbButton = new ComboBox()
+            {
+                Location = new System.Drawing.Point(150, 60),
+                Size = new System.Drawing.Size(100, 20),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            cmbButton.Items.Add("左键");
+            cmbButton.Items.Add("右键");
+            cmbButton.SelectedIndex = 0;
+            cmbButton.SelectedIndexChanged += (s, e) =>
+            {
+                clickButton = cmbButton.SelectedIndex == 0 ? MouseButtons.Left : MouseButtons.Right;
+            };
+
+            // 热键设置
+            Label lblHotkey = new Label()
+            {
+                Text = "启停热键:",
+                Location = new System.Drawing.Point(20, 100),
+                Size = new System.Drawing.Size(120, 20)
+            };
+
+            txtHotkey = new TextBox()
+            {
+                Location = new System.Drawing.Point(150, 100),
+                Size = new System.Drawing.Size(100, 20),
+                ReadOnly = true,
+                Text = hotkey.ToString()
+            };
+
+            btnSetHotkey = new Button()
+            {
+                Text = "设置",
+                Location = new System.Drawing.Point(260, 100),
+                Size = new System.Drawing.Size(60, 20)
+            };
+            btnSetHotkey.Click += BtnSetHotkey_Click;
+
+            btnConfirmHotkey = new Button()
+            {
+                Text = "确认",
+                Location = new System.Drawing.Point(260, 130),
+                Size = new System.Drawing.Size(60, 20)
+            };
+            btnConfirmHotkey.Click += BtnConfirmHotkey_Click;
+            btnConfirmHotkey.Enabled = false;
+
+            btnCancelHotkey = new Button()
+            {
+                Text = "取消",
+                Location = new System.Drawing.Point(260, 160),
+                Size = new System.Drawing.Size(60, 20)
+            };
+            btnCancelHotkey.Click += BtnCancelHotkey_Click;
+            btnCancelHotkey.Enabled = false;
+
+            // 状态显示
+            lblStatus = new Label()
+            {
+                Text = "状态: 停止",
+                Location = new System.Drawing.Point(20, 180),
+                Size = new System.Drawing.Size(200, 20),
+                ForeColor = System.Drawing.Color.Red
+            };
+
+            // 控制按钮
+            Button btnStart = new Button()
+            {
+                Text = "开始连点",
+                Location = new System.Drawing.Point(20, 220),
+                Size = new System.Drawing.Size(80, 30)
+            };
+            btnStart.Click += (s, e) => StartClicking(lblStatus);
+
+            Button btnStop = new Button()
+            {
+                Text = "停止连点",
+                Location = new System.Drawing.Point(110, 220),
+                Size = new System.Drawing.Size(80, 30)
+            };
+            btnStop.Click += (s, e) => StopClicking(lblStatus);
+
+            // 信息提示
+            Label lblInfo = new Label()
+            {
+                Text = "提示: 按下设置的热键可快速启停连点\n设置热键: 点击'设置' -> 按下组合键 -> 点击'确认'",
+                Location = new System.Drawing.Point(20, 260),
+                Size = new System.Drawing.Size(350, 40),
+                ForeColor = System.Drawing.Color.Gray
+            };
+
+            // 添加所有控件到窗体
+            this.Controls.AddRange(new Control[] {
+                lblInterval, nudInterval,
+                lblButton, cmbButton,
+                lblHotkey, txtHotkey, btnSetHotkey, btnConfirmHotkey, btnCancelHotkey,
+                lblStatus,
+                btnStart, btnStop,
+                lblInfo
+            });
+        }
+
+        private void BtnSetHotkey_Click(object sender, EventArgs e)
+        {
+            isHotkeySetMode = true;
+            tempHotkey = Keys.None;
+            txtHotkey.Text = "按下组合键...";
+            txtHotkey.BackColor = System.Drawing.Color.Yellow;
+            btnSetHotkey.Enabled = false;
+            btnConfirmHotkey.Enabled = false;
+            btnCancelHotkey.Enabled = true;
+        }
+
+        private void BtnConfirmHotkey_Click(object sender, EventArgs e)
+        {
+            if (tempHotkey != Keys.None)
+            {
+                hotkey = tempHotkey;
+                txtHotkey.Text = GetHotkeyString(hotkey);
+                txtHotkey.BackColor = System.Drawing.SystemColors.Window;
+                isHotkeySetMode = false;
+                btnSetHotkey.Enabled = true;
+                btnConfirmHotkey.Enabled = false;
+                btnCancelHotkey.Enabled = false;
+            }
+        }
+
+        private void BtnCancelHotkey_Click(object sender, EventArgs e)
+        {
+            txtHotkey.Text = GetHotkeyString(hotkey);
+            txtHotkey.BackColor = System.Drawing.SystemColors.Window;
+            isHotkeySetMode = false;
+            btnSetHotkey.Enabled = true;
+            btnConfirmHotkey.Enabled = false;
+            btnCancelHotkey.Enabled = false;
+        }
+
+        private void StartGlobalHook()
+        {
+            // 启动一个线程来监听键盘事件
+            Thread hookThread = new Thread(() =>
+            {
+                bool[] previousKeyStates = new bool[256]; // 存储之前的按键状态
+                
+                while (!this.IsDisposed)
+                {
+                    if (isHotkeySetMode)
+                    {
+                        // 检查当前所有按键状态
+                        Keys currentCombo = Keys.None;
+                        bool anyModifierPressed = false;
+                        
+                        // 检查修饰键
+                        bool ctrlPressed = (GetAsyncKeyState(Keys.ControlKey) & 0x8000) != 0;
+                        bool shiftPressed = (GetAsyncKeyState(Keys.ShiftKey) & 0x8000) != 0;
+                        bool altPressed = (GetAsyncKeyState(Keys.Menu) & 0x8000) != 0;
+                        
+                        if (ctrlPressed) 
+                        {
+                            currentCombo |= Keys.Control;
+                            anyModifierPressed = true;
+                        }
+                        if (shiftPressed) 
+                        {
+                            currentCombo |= Keys.Shift;
+                            anyModifierPressed = true;
+                        }
+                        if (altPressed) 
+                        {
+                            currentCombo |= Keys.Alt;
+                            anyModifierPressed = true;
+                        }
+                        
+                        // 检查普通键
+                        Keys detectedKey = Keys.None;
+                        for (int i = 0; i < 256; i++)
+                        {
+                            short keyState = GetAsyncKeyState((Keys)i);
+                            bool isCurrentPressed = (keyState & 0x8000) != 0;
+                            
+                            // 检测按键释放事件
+                            if (previousKeyStates[i] && !isCurrentPressed)
+                            {
+                                // 如果有修饰键被按下，而普通键被释放，则保存组合键
+                                if (anyModifierPressed && i >= 1 && i <= 254 && 
+                                    (Keys)i != Keys.ControlKey && (Keys)i != Keys.ShiftKey && (Keys)i != Keys.Menu)
+                                {
+                                    detectedKey = (Keys)i;
+                                    break;
+                                }
+                            }
+                            
+                            // 保存当前状态供下次比较
+                            previousKeyStates[i] = isCurrentPressed;
+                        }
+                        
+                        // 如果检测到组合键释放
+                        if (detectedKey != Keys.None)
+                        {
+                            tempHotkey = detectedKey | currentCombo;
+                            
+                            // 更新UI
+                            this.Invoke((MethodInvoker)delegate
+                            {
+                                txtHotkey.Text = GetHotkeyString(tempHotkey);
+                                btnConfirmHotkey.Enabled = true;
+                            });
+                        }
+                        else if (anyModifierPressed || ctrlPressed || shiftPressed || altPressed)
+                        {
+                            // 显示当前按下的组合键
+                            string displayText = "";
+                            if (ctrlPressed) displayText += "Ctrl + ";
+                            if (shiftPressed) displayText += "Shift + ";
+                            if (altPressed) displayText += "Alt + ";
+                            
+                            // 寻找当前按下的普通键
+                            for (int i = 0; i < 256; i++)
+                            {
+                                if (i != (int)Keys.ControlKey && i != (int)Keys.ShiftKey && i != (int)Keys.Menu)
+                                {
+                                    if ((GetAsyncKeyState((Keys)i) & 0x8000) != 0)
+                                    {
+                                        displayText += ((Keys)i).ToString();
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (!string.IsNullOrEmpty(displayText) && !displayText.EndsWith(" + "))
+                            {
+                                this.Invoke((MethodInvoker)delegate
+                                {
+                                    txtHotkey.Text = displayText;
+                                });
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 检查是否按下了热键（按下并抬起才算一次完整的操作）
+                        bool currentHotkeyState = IsKeyPressed(hotkey);
+                        
+                        // 当热键从按下变为释放时（即按下并抬起），切换连点状态
+                        if (lastHotkeyState && !currentHotkeyState)
+                        {
+                            this.Invoke((MethodInvoker)delegate
+                            {
+                                if (lblStatus != null)
+                                {
+                                    if (isRunning)
+                                        StopClicking(lblStatus);
+                                    else
+                                        StartClicking(lblStatus);
+                                }
+                            });
+                        }
+                        
+                        lastHotkeyState = currentHotkeyState;
+                    }
+                    
+                    Thread.Sleep(10);
+                }
+            });
+            hookThread.IsBackground = true;
+            hookThread.Start();
+        }
+
+        private string GetHotkeyString(Keys key)
+        {
+            string result = "";
+            
+            if ((key & Keys.Control) == Keys.Control)
+                result += "Ctrl + ";
+            if ((key & Keys.Shift) == Keys.Shift)
+                result += "Shift + ";
+            if ((key & Keys.Alt) == Keys.Alt)
+                result += "Alt + ";
+            
+            // 获取按键名称（去掉修饰符）
+            Keys actualKey = key & ~Keys.Modifiers;
+            result += actualKey.ToString();
+            
+            return result;
+        }
+
+        private bool IsKeyPressed(Keys hotkey)
+        {
+            Keys actualKey = hotkey & ~Keys.Modifiers;
+            bool isCtrlPressed = ((hotkey & Keys.Control) == Keys.Control) ? 
+                (GetAsyncKeyState(Keys.ControlKey) & 0x8000) != 0 : true;
+            bool isShiftPressed = ((hotkey & Keys.Shift) == Keys.Shift) ? 
+                (GetAsyncKeyState(Keys.ShiftKey) & 0x8000) != 0 : true;
+            bool isAltPressed = ((hotkey & Keys.Alt) == Keys.Alt) ? 
+                (GetAsyncKeyState(Keys.Menu) & 0x8000) != 0 : true;
+            bool isActualKeyPressed = (GetAsyncKeyState(actualKey) & 0x8000) != 0;
+            
+            return isCtrlPressed && isShiftPressed && isAltPressed && isActualKeyPressed;
+        }
+
+        private void StartClicking(Label statusLabel)
+        {
+            if (isRunning) return;
+            
+            isRunning = true;
+            statusLabel.Text = "状态: 运行中";
+            statusLabel.ForeColor = System.Drawing.Color.Green;
+            
+            cancellationTokenSource = new CancellationTokenSource();
+            
+            clickThread = new Thread(async () =>
+            {
+                while (!cancellationTokenSource.Token.IsCancellationRequested && isRunning)
+                {
+                    try
+                    {
+                        await Task.Delay(interval, cancellationTokenSource.Token);
+                        
+                        if (!isRunning) break;
+                        
+                        // 执行点击操作
+                        PerformMouseClick();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            });
+            clickThread.IsBackground = true;
+            clickThread.Start();
+        }
+
+        private void StopClicking(Label statusLabel)
+        {
+            if (!isRunning) return;
+            
+            isRunning = false;
+            statusLabel.Text = "状态: 停止";
+            statusLabel.ForeColor = System.Drawing.Color.Red;
+            
+            cancellationTokenSource?.Cancel();
+        }
+
+        private void PerformMouseClick()
+        {
+            if (clickButton == MouseButtons.Left)
+            {
+                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, IntPtr.Zero);
+                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, IntPtr.Zero);
+            }
+            else if (clickButton == MouseButtons.Right)
+            {
+                mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, IntPtr.Zero);
+                mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, IntPtr.Zero);
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            StopClicking(null);
+            base.OnFormClosing(e);
+        }
+    }
+
+    // 程序入口
+    public class Program
+    {
+        [STAThread]
+        public static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+        }
+    }
+}
+
+
+
