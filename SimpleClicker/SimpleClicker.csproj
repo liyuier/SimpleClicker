@@ -75,7 +75,10 @@
         <Reference Include="System.Xml"/>
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="AppConfig.cs" />
+        <Compile Include="KeyboardHook.cs" />
         <Compile Include="MainForm.cs" />
+        <Compile Include="MouseController.cs" />
     </ItemGroup>
     <ItemGroup>
       <Folder Include="Properties\" />
